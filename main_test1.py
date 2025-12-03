@@ -6,7 +6,7 @@ from typing import Dict, Any
 from ai.detection_ai_test1 import AIDetectionModule
 from preprocessing.image_preprocessing_test1 import FramePreprocessor
 from svd.svd_test2 import SVDNoveltyDetector
-
+import csv
 import logging
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ class SVDGatekeeperSystem:
         logger.info("\nStarting frame processing...")
         logger.info("-" * 70)
         
-        prev_frame = None
+        self.reference_frame_error = None
         
         for frame_idx, frame in self.preprocessor.get_next_frame():
             frame_start_time = time.time()
@@ -88,14 +88,21 @@ class SVDGatekeeperSystem:
             
             # Compute reconstruction error
             error, frame_reconstructed = self.svd_detector.compare_frames(frame)
+            if self.reference_frame_error == None:
+                self.reference_frame_error = error  # Set baseline for first frame
+                detections = self.ai_module.run_detection_ai(frame)
+                self.metrics.ai_calls += 1
+
             self.metrics.total_error += error
             
             # Decision: is this frame novel?
-            is_novel = error > self.threshold
+            is_novel = abs(error - self.reference_frame_error) > self.threshold
             
             if is_novel:
                 self.metrics.novel_frames += 1
-                logger.warning(f"[Frame {frame_idx}] NOVELTY DETECTED | Error: {error:.4f} > τ:{self.threshold}")
+                logger.warning(f"[Frame {frame_idx}] NOVELTY DETECTED | Error: {error:.4f}")
+                logger.warning(f"[Frame {frame_idx}] NOVELTY DETECTED | Error difference: {abs(error - self.reference_frame_error):.4f} > τ:{self.threshold}")
+                self.reference_frame_error = error  # Update reference error
                 
                 # Trigger AI model
                 detections = self.ai_module.run_detection_ai(frame)
@@ -108,6 +115,7 @@ class SVDGatekeeperSystem:
                                                          error, save_path=plot_name)
             else:
                 logger.info(f"[Frame {frame_idx}] Skipped (not novel) | Error: {error:.4f}")
+                logger.info(f"[Frame {frame_idx}] Skipped (not novel) | Error difference: {abs(error - self.reference_frame_error):.4f}")
             
             frame_time = time.time() - frame_start_time
             self.metrics.frame_times.append(frame_time)
@@ -140,50 +148,47 @@ class SVDGatekeeperSystem:
 
 def main():
     """Main entry point with CLI argument parsing."""
-    parser = argparse.ArgumentParser(
-        description="SVD-Based Novelty Detection Gatekeeper"
-    )
-    parser.add_argument('input_path', help='Path to image folder or .mp4 video')
-    parser.add_argument('--threshold', type=float, default=0.15, 
-                       help='Novelty threshold τ (default: 0.15)')
-    parser.add_argument('--rank', type=int, default=20,
-                       help='SVD compression rank k (default: 20)')
-    parser.add_argument('--window', type=int, default=1,
-                       help='Difference window W (default: 1)')
-    parser.add_argument('--size', type=str, default='240,320',
-                       help='Target frame size H,W (default: 240,320)')
-    parser.add_argument('--plots', action='store_true',
-                       help='Display reconstruction plots')
-    parser.add_argument('--mock-ai', action='store_true',
-                       help='Use mock AI instead of YOLO')
-    
-    args = parser.parse_args()
     
     # Parse target size
-    try:
-        target_size = tuple(map(int, args.size.split(',')))
-        if len(target_size) != 2:
-            raise ValueError
-    except:
-        logger.error("Invalid size format. Use H,W (e.g., 240,320)")
-        return
-    
-    # Create and run system
-    system = SVDGatekeeperSystem(
-        threshold=args.threshold,
-        compression_rank=args.rank,
-        difference_window=args.window,
-        target_size=target_size,
-        display_plots=args.plots,
-        use_mock_ai=args.mock_ai
-    )
-    
-    try:
-        system.process_input(args.input_path)
-        system.process_frames()
-        system.print_summary_report()
-    except Exception as e:
-        logger.error(f"Error during processing: {e}", exc_info=True)
+
+    threshold = 0.01
+    rank = 1
+    window = 1
+    target_size = (240, 320)
+    plots = True
+    mock_ai = False
+    input_path = "data/" # Default path; replace with actual path or CLI arg
+
+    with open('results.csv', mode='w', newline='') as log_file:
+        fieldnames = ['Threshold', 'Rank', 'Total Frames', 'Novel Frames', 
+                      'AI Calls', 'Efficiency (%)', 'Avg Time (ms)', 'Throughput (fps)']
+        writer = csv.writer(log_file)
+        writer.writerow(fieldnames)
+
+        # Create and run system
+        while rank < 20:
+            threshold = 0.01
+            while threshold < 0.1:
+                system = SVDGatekeeperSystem(
+                    threshold=round(threshold, 2),
+                    compression_rank=rank,
+                    difference_window=window,
+                    target_size=target_size,
+                    display_plots=plots,
+                    use_mock_ai=mock_ai
+                )
+                try:
+                    system.process_input(input_path)
+                    system.process_frames()
+                    system.print_summary_report()
+                    writer.writerow([f"{threshold:.2f}", f"{rank}", f"{system.metrics.total_frames}", f"{system.metrics.novel_frames}", f"{system.metrics.ai_calls}",
+                                    f"{(1.0 - system.metrics.ai_calls / system.metrics.total_frames) * 100}",
+                                    f"{((system.metrics.total_time / system.metrics.total_frames)*1000):.2f}",
+                                    f"{(system.metrics.total_frames / system.metrics.total_time):.2f}"])
+                except Exception as e:
+                    logger.error(f"Error during processing: {e}", exc_info=True)
+                threshold += 0.01
+            rank += 1
 
 if __name__ == "__main__":
     main()
