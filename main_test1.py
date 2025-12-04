@@ -2,6 +2,8 @@ import time
 import argparse
 from dataclasses import dataclass
 from typing import Dict, Any
+import psutil
+import os
 
 from ai.detection_ai_test1 import AIDetectionModule
 from preprocessing.image_preprocessing_test1 import FramePreprocessor
@@ -19,6 +21,9 @@ class SystemMetrics:
     total_error: float = 0.0
     total_time: float = 0.0
     frame_times: list = None
+    peak_memory_mb: float = 0.0
+    peak_cpu_percent: float = 0.0
+    avg_cpu_percent: float = 0.0
     
     def __post_init__(self):
         if self.frame_times is None:
@@ -58,6 +63,9 @@ class SVDGatekeeperSystem:
         logger.info(f"  SVD Rank k = {compression_rank}")
         logger.info(f"  Difference Window W = {difference_window}")
         logger.info("=" * 70)
+        
+        self.process = psutil.Process(os.getpid())
+        self.cpu_samples = []
     
     def process_input(self, input_path: str) -> None:
         """
@@ -73,6 +81,14 @@ class SVDGatekeeperSystem:
             logger.info(f"Loading images from: {input_path}")
             self.preprocessor.load_images(input_path)
     
+    def _sample_cpu_usage(self) -> None:
+        """Sample CPU usage for averaging."""
+        try:
+            cpu_percent = self.process.cpu_percent(interval=None)
+            self.cpu_samples.append(cpu_percent)
+        except:
+            pass
+    
     def process_frames(self) -> None:
         """
         Main processing loop: iterate frames, detect novelty, trigger AI.
@@ -81,6 +97,7 @@ class SVDGatekeeperSystem:
         logger.info("-" * 70)
         
         self.reference_frame_error = None
+        self.cpu_samples = []
         
         for frame_idx, frame in self.preprocessor.get_next_frame():
             frame_start_time = time.time()
@@ -120,6 +137,17 @@ class SVDGatekeeperSystem:
             frame_time = time.time() - frame_start_time
             self.metrics.frame_times.append(frame_time)
             self.metrics.total_time += frame_time
+            self._sample_cpu_usage()
+        
+        # Calculate resource metrics
+        try:
+            self.metrics.peak_memory_mb = self.process.memory_info().rss / 1024 / 1024
+        except:
+            self.metrics.peak_memory_mb = 0.0
+        
+        if self.cpu_samples:
+            self.metrics.avg_cpu_percent = sum(self.cpu_samples) / len(self.cpu_samples)
+            self.metrics.peak_cpu_percent = max(self.cpu_samples)
         
         logger.info("-" * 70)
     
@@ -144,7 +172,32 @@ class SVDGatekeeperSystem:
         logger.info(f"Avg Processing Time/Frame: {avg_time*1000:.2f} ms")
         logger.info(f"Total Processing Time:     {self.metrics.total_time:.2f} seconds")
         logger.info(f"Throughput:                {self.metrics.total_frames / self.metrics.total_time:.1f} fps")
+        logger.info(f"Peak Memory Usage:         {self.metrics.peak_memory_mb:.1f} MB")
+        logger.info(f"Average CPU Usage:         {self.metrics.avg_cpu_percent:.1f}%")
+        logger.info(f"Peak CPU Usage:            {self.metrics.peak_cpu_percent:.1f}%")
         logger.info("=" * 70 + "\n")
+
+def warmup_ai(target_size: tuple, use_mock_ai: bool) -> None:
+    """Run AI warmup pass before main test loop."""
+    logger.info("\n" + "=" * 70)
+    logger.info("WARMUP PHASE: Running AI detection once before test loop")
+    logger.info("=" * 70)
+    
+    try:
+        ai_module = AIDetectionModule(use_mock=use_mock_ai)
+        preprocessor = FramePreprocessor(target_size=target_size)
+        preprocessor.load_images("data/")
+        
+        # Get first frame for warmup
+        for frame_idx, frame in preprocessor.get_next_frame():
+            logger.info(f"Running warmup detection on first frame...")
+            detections = ai_module.run_detection_ai(frame)
+            logger.info(f"Warmup complete. AI model loaded and ready.")
+            break
+    except Exception as e:
+        logger.warning(f"Warmup phase encountered an issue (non-critical): {e}")
+    
+    logger.info("=" * 70 + "\n")
 
 def main():
     """Main entry point with CLI argument parsing."""
@@ -157,17 +210,22 @@ def main():
     target_size = (240, 320)
     plots = True
     mock_ai = False
-    input_path = "data/" # Default path; replace with actual path or CLI arg
+    input_path = "data/raw_data" # Default path; replace with actual path or CLI arg
+
+    # Run AI warmup before test loop
+    warmup_ai(target_size, mock_ai)
 
     with open('results.csv', mode='w', newline='') as log_file:
         fieldnames = ['Threshold', 'Rank', 'Total Frames', 'Novel Frames', 
-                      'AI Calls', 'Efficiency (%)', 'Avg Time (ms)', 'Throughput (fps)']
+                      'AI Calls', 'Efficiency (%)', 'Avg Time (ms)', 'Throughput (fps)',
+                      'Peak Memory (MB)', 'Avg CPU (%)', 'Peak CPU (%)']
         writer = csv.writer(log_file)
         writer.writerow(fieldnames)
 
         # Create and run system
-        compression_ranks = [5, 10, 20, 30, 40, 60, 80]
-        for rank in compression_ranks:
+        
+        while rank < 80:
+            threshold = 0.01
             while threshold < 0.2:
                 system = SVDGatekeeperSystem(
                     threshold=round(threshold, 2),
@@ -184,12 +242,15 @@ def main():
                     writer.writerow([f"{threshold:.2f}", f"{rank}", f"{system.metrics.total_frames}", f"{system.metrics.novel_frames}", f"{system.metrics.ai_calls}",
                                     f"{(1.0 - system.metrics.ai_calls / system.metrics.total_frames) * 100}",
                                     f"{((system.metrics.total_time / system.metrics.total_frames)*1000):.2f}",
-                                    f"{(system.metrics.total_frames / system.metrics.total_time):.2f}"])
+                                    f"{(system.metrics.total_frames / system.metrics.total_time):.2f}",
+                                    f"{system.metrics.peak_memory_mb:.1f}",
+                                    f"{system.metrics.avg_cpu_percent:.1f}",
+                                    f"{system.metrics.peak_cpu_percent:.1f}"])
                 except Exception as e:
                     logger.error(f"Error during processing: {e}", exc_info=True)
                 threshold += 0.01
-
-            threshold = 0.01    # Reset for next rank loop
+                # Reset for next rank loop
+                rank+=1
             
 
 if __name__ == "__main__":
