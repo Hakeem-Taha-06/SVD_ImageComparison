@@ -41,10 +41,10 @@ class FramePreprocessor:
         
         # Find all image files
         image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
-        image_files = sorted([
-            f for f in dir_path.iterdir() 
-            if f.suffix.lower() in image_extensions
-        ])
+        image_files = sorted(
+            [f for f in dir_path.iterdir() if f.suffix.lower() in image_extensions],
+            key=lambda x: int(''.join(filter(str.isdigit, x.stem))) if any(c.isdigit() for c in x.stem) else x.stem
+        )
         
         if not image_files:
             raise ValueError(f"No images found in {directory_path}")

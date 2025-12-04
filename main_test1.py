@@ -166,9 +166,9 @@ def main():
         writer.writerow(fieldnames)
 
         # Create and run system
-        while rank < 20:
-            threshold = 0.01
-            while threshold < 0.1:
+        compression_ranks = [5, 10, 20, 30, 40, 60, 80]
+        for rank in compression_ranks:
+            while threshold < 0.2:
                 system = SVDGatekeeperSystem(
                     threshold=round(threshold, 2),
                     compression_rank=rank,
@@ -188,7 +188,9 @@ def main():
                 except Exception as e:
                     logger.error(f"Error during processing: {e}", exc_info=True)
                 threshold += 0.01
-            rank += 1
+
+            threshold = 0.01    # Reset for next rank loop
+            
 
 if __name__ == "__main__":
     main()
