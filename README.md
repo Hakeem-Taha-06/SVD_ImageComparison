@@ -1,123 +1,108 @@
-# SVD Novelty Detection - Testing Framework
+# SVD Gatekeeper
 
-Efficient video frame processing using SVD-based novelty detection to reduce AI inference calls.
+Real-time video novelty detection using SVD reconstruction error with AI object detection.
+
+![Layout](https://img.shields.io/badge/Resolution-1920x1080-blue) ![Python](https://img.shields.io/badge/Python-3.8+-green) ![OpenCV](https://img.shields.io/badge/OpenCV-Required-orange)
+
+## What It Does
+
+Monitors a live video feed and detects **novel events** (changes in the scene) using Singular Value Decomposition (SVD). When something new appears, it triggers YOLO AI detection to identify objects.
+
+**Key Concept:** Instead of running expensive AI on every frame, SVD acts as a "gatekeeper" - only running AI when something changes.
 
 ## Quick Start
 
-### Run Tests
-```bash
-# Basic test (4 configurations, ~30 seconds)
-python test_pipeline.py --dataset data/raw_data/dataset2_Faculty_entering
+1. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-# Full parameter sweep (25 configurations)
-python test_pipeline.py --dataset data/raw_data/dataset2_Faculty_entering --full-sweep
+2. **Configure video source** in `main.py`:
+   ```python
+   VIDEO_URL = "http://192.168.1.61:8080/video"  # Your IP camera URL
+   ```
 
-# Custom parameters
-python test_pipeline.py --dataset data/raw_data/dataset2_Faculty_entering --ranks 10,20,30 --thresholds 0.1,0.15,0.2
+3. **Run:**
+   ```bash
+   python main.py
+   ```
 
-# Fast testing (mock AI, no real YOLO)
-python test_pipeline.py --dataset data/raw_data/dataset2_Faculty_entering --mock-ai
+## Controls
+
+| Control | Action |
+|---------|--------|
+| **Rank slider** | Adjust SVD compression (higher = more detail) |
+| **Threshold slider** | Adjust novelty sensitivity |
+| **F key** | Toggle fullscreen |
+| **ESC** | Exit |
+| **RECONNECT button** | Retry video connection (appears when disconnected) |
+
+## How SVD Gatekeeper Works
+
+```
+Live Frame → Grayscale → SVD Decomposition → Reconstruction
+                                                    ↓
+                                            Error = ||Original - Reconstructed||
+                                                    ↓
+                                            Error changed significantly?
+                                                    ↓
+                                    YES → NOVELTY! → Run YOLO AI Detection
+                                    NO  → Skip AI (save processing)
 ```
 
-### View Results
-Results are saved in `results/<dataset_name>/`:
-- `per_frame_log_*.csv` - Detailed per-frame metrics
-- `summary_metrics_*.csv` - Aggregated results per configuration
-- `baseline_metrics_*.csv` - Pure AI baseline performance
-- `comparison_metrics_*.csv` - Filter vs baseline comparison
-- `parameter_sweep_*.csv` - Overview of all configurations
+## UI Layout
 
-### Analyze Results
-```bash
-python analyze_results.py --results results/dataset2_Faculty_entering
+```
+┌─────────────────────────────┬──────────────┐
+│   ORIGINAL FRAME            │  STATUS      │
+│                             ├──────────────┤
+├─────────────────────────────┤  METRICS     │
+│   SVD RECONSTRUCTED         ├──────────────┤
+│                             │  RANK SLIDER │
+│                             ├──────────────┤
+│                             │  THRESHOLD   │
+│                             ├──────────────┤
+│                             │  DETECTED    │
+│                             │  OBJECTS     │
+└─────────────────────────────┴──────────────┘
 ```
 
-## Key Metrics
+## Configuration
 
-### Filter Accuracy
-**Filter Accuracy = (TP + TN) / Total Frames**
+Edit the top of `main.py`:
 
-Measures how well the SVD filter decides which frames need AI processing:
-- **TP** (True Positive): Novel frame → Filter detected ✅
-- **TN** (True Negative): Non-novel frame → Filter ignored ✅
-- **FP** (False Positive): Non-novel frame → Filter detected ❌
-- **FN** (False Negative): Novel frame → Filter missed ⚠️
+```python
+# Video source
+VIDEO_URL = "http://192.168.1.61:8080/video"
 
-### Performance Metrics
-- **FPS**: Processing speed (frames per second)
-- **Reduction %**: Percentage of AI calls avoided
-- **CPU/Memory**: Resource usage
-- **Precision/Recall/F1**: Detection quality
+# Initial parameters
+INITIAL_RANK = 20          # SVD compression rank
+INITIAL_THRESHOLD = 5      # Novelty threshold (÷100)
+
+# Colors (BGR format)
+COLOR_PRIMARY = (144, 119, 4)      # Panel backgrounds
+COLOR_SECONDARY = (221, 233, 238)  # Main background
+COLOR_ACCENT = (246, 252, 255)     # Highlights
+```
+
+## Requirements
+
+- Python 3.8+
+- OpenCV (`opencv-python`)
+- NumPy
+- Ultralytics (YOLO)
 
 ## Project Structure
 
 ```
-data/
-├── raw_data/              # Datasets (images/videos)
-│   ├── dataset1_test/
-│   ├── dataset2_Faculty_entering/
-│   └── dataset3_evening_university_walk/
-└── labels/                # Ground truth labels
-    ├── dataset1_test_labels.csv
-    └── dataset2_Faculty_entering_labels.csv
-
-testing/                   # Core framework (7 modules)
-├── baseline_runner.py     # Pure AI baseline
-├── experiment_runner.py   # SVD filter experiments
-├── ground_truth_loader.py # Load truth labels
-├── metrics_calculator.py  # Compute metrics
-├── csv_logger.py         # Save CSV outputs
-├── system_monitor.py     # CPU/memory tracking
-└── __init__.py
-
-test_pipeline.py          # Main entry point ⭐
-run_tests.py             # Test orchestrator
-analyze_results.py       # Post-processing analysis
-create_ground_truth_template.py  # Generate label templates
-verify_setup.py          # Check installation
+├── main.py           # Main application
+├── src/core/
+│   ├── svd_detector.py    # SVD novelty detection
+│   ├── ai_detector.py     # YOLO wrapper
+│   └── preprocessor.py    # Frame preprocessing
+├── requirements.txt
+└── yolov8n.pt        # YOLO model weights
 ```
-
-## Ground Truth Labels
-
-Create labels to enable quality metrics (precision, recall, F1):
-
-```bash
-# Generate template (saved to data/labels/)
-python create_ground_truth_template.py --dataset data/raw_data/dataset2_Faculty_entering
-
-# Edit the CSV file in data/labels/ to mark novel frames (is_novel=1)
-# Then run tests - quality metrics will be calculated automatically
-```
-
-Format (saved in `data/labels/<dataset_name>_labels.csv`):
-```csv
-frame_index,is_novel
-0,0
-1,0
-12,1  ← Novel event
-13,1
-14,1
-15,0
-```
-
-## Installation
-
-```bash
-pip install -r requirements_testing.txt
-```
-
-## Documentation
-
-- **README.md** - This file (overview and quick start)
-- **TESTING.md** - Testing guide (detailed commands and metrics)
-
-## Example Results
-
-With SVD filter (Rank=10, Threshold=0.15):
-- **99.15% reduction** in AI calls (118 → 1)
-- **31% faster** processing
-- **94% CPU savings**
-- **Filter Accuracy**: 86.55%
 
 ## License
 
